@@ -15,6 +15,8 @@
 
 #![no_std]
 
+pub mod state;
+
 use core::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
