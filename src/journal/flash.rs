@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod mock;
+
 use core::ops::Range;
 
 use embedded_storage_async::nor_flash::NorFlash;
@@ -76,7 +79,8 @@ impl<T: NorFlash> FlashJournal<T> {
         address as usize / Self::PAGE_SIZE
     }
 
-    /// Walk through the entire NVM range, and find the last valid [State] entry.
+    /// Walk through the entire NVM range, and find the last valid [State] entry
+    /// and find the first empty slot of a [State] entry, if any.
     async fn compute_cache<const N: usize>(inner: &mut T) -> Result<Cache, T::Error> {
         let mut buf = [0u8; N];
         let block_count = inner.capacity().div_ceil(N);
@@ -86,7 +90,7 @@ impl<T: NorFlash> FlashJournal<T> {
             let block_start = block_i * N;
             let block_end = (block_start + N).min(inner.capacity());
 
-            let slice = &mut buf[block_start..block_end];
+            let slice = &mut buf[0..block_end - block_start];
             inner.read(block_start as u32, slice).await?;
 
             const CHUNK_SIZE: usize = 2;
@@ -130,7 +134,12 @@ impl<T: NorFlash> FlashJournal<T> {
     }
 
     /// Synchronize the latest [State] to the [FlashJournal].
-    pub async fn set<const N: usize>(&mut self, state: State) -> Result<(), Error<T::Error>> {
+    pub async fn set<const N: usize>(&mut self, state: &State) -> Result<(), Error<T::Error>> {
+        // Check if the current state is identical.
+        if self.get() == Some(&state) {
+            return Ok(());
+        }
+
         // Write the new state somewhere.
         if let Some(first_empty_slot) = self.cache.first_empty_slot {
             // If detected first empty slot, we can write to it as we are [NorFlash] and the empty slot is all `0xff``.
@@ -148,7 +157,7 @@ impl<T: NorFlash> FlashJournal<T> {
 
                 // Erase rest of pages, and the erasure of the final page will validate our just written state.
                 // If this gets interrupted, the last state will remain valid.
-                self.erase_pages(page_i..Self::page_count(&self.inner)).await?;
+                self.erase_pages(1..Self::page_count(&self.inner)).await?;
             } else {
                 // Last valid state is in the first page, but the rest of the pages contain no free slot.
                 // This edge-case we need to deal with separately.
@@ -176,5 +185,75 @@ impl<T: NorFlash> FlashJournal<T> {
         } else {
             Err(Error::ReadbackFailed)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::journal::{
+        flash::mock::MockFlashBase,
+        state::{Slot, Status},
+    };
+
+    use super::*;
+
+    async fn test_journal(nvm: impl NorFlash, assert_empty: bool) -> Option<usize> {
+        let mut journal = FlashJournal::new::<4>(nvm).await.unwrap();
+
+        if assert_empty {
+            assert!(journal.get().is_none());
+        }
+
+        {
+            let slot_a = Slot::try_from(1).unwrap();
+            let slot_b = Slot::try_from(2).unwrap();
+
+            let state = State::new(Status::Initial, slot_b, slot_a);
+            journal.set::<4>(&state).await.unwrap();
+            assert_eq!(journal.get(), Some(&state));
+
+            // Re-do the same operation.
+            journal.set::<4>(&state).await.unwrap();
+            assert_eq!(journal.get(), Some(&state));
+        }
+
+        // Write all different kinds of states.
+        for status in [Status::Initial, Status::Attempting, Status::Confirmed, Status::Failed] {
+            for i in 0b0..0b111u8 {
+                let slot_a = Slot::try_from(i).unwrap();
+
+                for j in 0b0..0b111u8 {
+                    let slot_b = Slot::try_from(j).unwrap();
+
+                    let state = State::new(status, slot_b, slot_a);
+                    journal.set::<4>(&state).await.unwrap();
+                    assert_eq!(journal.get(), Some(&state));
+                }
+            }
+        }
+
+        journal.cache.first_empty_slot
+    }
+
+    #[test]
+    fn journal_normal() {
+        let mut mock: MockFlashBase<3, 2, 8> = MockFlashBase::new(None, true);
+        embassy_futures::block_on(test_journal(&mut mock, true));
+    }
+
+    #[test]
+    fn journal_garbage() {
+        let mut mock: MockFlashBase<3, 2, 8> = MockFlashBase::new(None, true);
+
+        embassy_futures::block_on(async {
+            // Write garbage to pages 1 and 2.
+            mock.write(16, &[0xaa; 32]).await.unwrap();
+            let valid_address = test_journal(&mut mock, true).await;
+
+            // Insert broken as we happen to have a valid address with this sequence.
+            mock.write(valid_address.unwrap() as u32, &[0xaa, 0xaa]).await.unwrap();
+
+            test_journal(&mut mock, false).await;
+        });
     }
 }

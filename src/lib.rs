@@ -15,6 +15,10 @@
 
 #![no_std]
 
+#[cfg(test)]
+#[macro_use]
+extern crate std;
+
 pub mod journal;
 
 use core::mem::size_of;

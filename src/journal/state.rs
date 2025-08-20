@@ -126,7 +126,7 @@ impl State {
 }
 
 #[cfg(test)]
-mod unit_tests {
+mod tests {
     use super::*;
 
     /// Test whether we can construct only valid [Slot] values.
