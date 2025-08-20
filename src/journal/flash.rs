@@ -244,7 +244,6 @@ mod tests {
     #[test]
     fn journal_garbage() {
         let mut mock: MockFlashBase<3, 2, 8> = MockFlashBase::new(None, true);
-
         embassy_futures::block_on(async {
             // Write garbage to pages 1 and 2.
             mock.write(16, &[0xaa; 32]).await.unwrap();
@@ -254,6 +253,30 @@ mod tests {
             mock.write(valid_address.unwrap() as u32, &[0xaa, 0xaa]).await.unwrap();
 
             test_journal(&mut mock, false).await;
+        });
+    }
+
+    #[test]
+    fn journal_realistic() {
+        // Use a realistic page count and size.
+        let mut mock: MockFlashBase<2, 2, 2048> = MockFlashBase::new(None, true);
+        embassy_futures::block_on(async {
+            for status in [Status::Initial, Status::Attempting, Status::Confirmed, Status::Failed] {
+                for i in 0b0..0b111u8 {
+                    let slot_a = Slot::try_from(i).unwrap();
+
+                    for j in 0b0..0b111u8 {
+                        let slot_b = Slot::try_from(j).unwrap();
+
+                        let state = State::new(status, slot_b, slot_a);
+
+                        // Practice you re-init the journal every boot and application load.
+                        let mut journal = FlashJournal::new::<256>(&mut mock).await.unwrap();
+                        journal.set::<4>(&state).await.unwrap();
+                        assert_eq!(journal.get(), Some(&state));
+                    }
+                }
+            }
         });
     }
 }
