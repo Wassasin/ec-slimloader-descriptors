@@ -5,6 +5,7 @@ const CRC: crc::Crc<u8> = crc::Crc::<u8>::new(&crc::CRC_8_OPENSAFETY);
 /// Image slot ID.
 ///
 /// Valid values from 0x00 to 0x06.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Slot(u8);
 
 #[derive(Debug)]
@@ -124,8 +125,9 @@ impl State {
 mod unit_tests {
     use super::*;
 
+    /// Test whether we can construct only valid [Slot] values.
     #[test]
-    fn slot_validity() {
+    fn slot_construction() {
         for i in 0b0..0b111u8 {
             assert!(Slot::try_from(i).is_ok());
         }
@@ -135,9 +137,39 @@ mod unit_tests {
         }
     }
 
+    /// Construct all possible [State] values and test whether we can get fields back out again.
     #[test]
-    fn state_validity() {
-        let state = State::new(Status::Initial, Slot::try_from(2).unwrap(), Slot::try_from(1).unwrap());
-        assert_eq!(state.0[1], 12);
+    fn state_validity_content() {
+        // Test all possible states.
+        for status in [Status::Initial, Status::Attempting, Status::Confirmed, Status::Failed] {
+            for i in 0b0..0b111u8 {
+                let slot_a = Slot::try_from(i).unwrap();
+
+                for j in 0b0..0b111u8 {
+                    let slot_b = Slot::try_from(j).unwrap();
+
+                    let state = State::new(status, slot_b, slot_a);
+                    assert_eq!(state.status(), status);
+                    assert_eq!(state.target(), slot_b);
+                    assert_eq!(state.backup(), slot_a);
+                }
+            }
+        }
+    }
+
+    /// Try a few handpicked [State] values and assert Crc value.
+    #[test]
+    fn state_validity_crc() {
+        let slot_a = Slot::try_from(1).unwrap();
+        let slot_b = Slot::try_from(2).unwrap();
+
+        let state = State::new(Status::Initial, slot_b, slot_a);
+        assert_eq!(state.0[1], 12); // Crc
+        let state = State::new(Status::Attempting, slot_b, slot_a);
+        assert_eq!(state.0[1], 234); // Crc
+        let state = State::new(Status::Confirmed, slot_b, slot_a);
+        assert_eq!(state.0[1], 9); // Crc
+        let state = State::new(Status::Failed, slot_b, slot_a);
+        assert_eq!(state.0[1], 239); // Crc
     }
 }

@@ -15,7 +15,7 @@
 
 #![no_std]
 
-pub mod state;
+pub mod journal;
 
 use core::mem::size_of;
 
