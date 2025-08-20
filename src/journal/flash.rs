@@ -136,7 +136,7 @@ impl<T: NorFlash> FlashJournal<T> {
     /// Synchronize the latest [State] to the [FlashJournal].
     pub async fn set<const N: usize>(&mut self, state: &State) -> Result<(), Error<T::Error>> {
         // Check if the current state is identical.
-        if self.get() == Some(&state) {
+        if self.get() == Some(state) {
             return Ok(());
         }
 
@@ -180,7 +180,7 @@ impl<T: NorFlash> FlashJournal<T> {
         self.cache = Self::compute_cache::<N>(&mut self.inner).await?;
 
         // Check if the readback is successful.
-        if self.get() == Some(&state) {
+        if self.get() == Some(state) {
             Ok(())
         } else {
             Err(Error::ReadbackFailed)

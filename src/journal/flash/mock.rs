@@ -1,7 +1,4 @@
-use core::{
-    fmt::Display,
-    ops::{Add, AddAssign, Range},
-};
+use core::{fmt::Display, ops::Range};
 use embedded_storage_async::nor_flash::{
     ErrorType, MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
 };
@@ -23,7 +20,6 @@ use Writable::*;
 pub struct MockFlashBase<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> {
     writable: Vec<Writable>,
     data: Vec<u8>,
-    current_stats: FlashStatsSnapshot,
     /// A countdown to shutoff. When some and 0, an early shutoff will happen.
     pub bytes_until_shutoff: Option<u32>,
     /// When true, write buffers have to be aligned
@@ -46,21 +42,11 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
 
     const PAGE_BYTES: usize = PAGE_WORDS * BYTES_PER_WORD;
 
-    /// The full address range of this flash
-    pub const FULL_FLASH_RANGE: Range<u32> = 0..(PAGES * PAGE_WORDS * BYTES_PER_WORD) as u32;
-
     /// Create a new flash instance.
     pub fn new(bytes_until_shutoff: Option<u32>, alignment_check: bool) -> Self {
         Self {
             writable: vec![O; Self::CAPACITY_WORDS],
             data: vec![u8::MAX; Self::CAPACITY_BYTES],
-            current_stats: FlashStatsSnapshot {
-                erases: 0,
-                reads: 0,
-                writes: 0,
-                bytes_read: 0,
-                bytes_written: 0,
-            },
             bytes_until_shutoff,
             alignment_check,
         }
@@ -93,19 +79,12 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
                 *bytes_until_shutoff = next;
                 Ok(())
             } else {
-                #[cfg(fuzzing_repro)]
-                eprintln!("!!! Shutoff at {address} while doing '{operation:?}' !!!");
                 self.bytes_until_shutoff = None;
                 Err(MockFlashError::EarlyShutoff(address, operation))
             }
         } else {
             Ok(())
         }
-    }
-
-    /// Get a snapshot of the performance counters
-    pub fn stats_snapshot(&self) -> FlashStatsSnapshot {
-        self.current_stats
     }
 }
 
@@ -121,9 +100,6 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> R
     const READ_SIZE: usize = BYTES_PER_WORD;
 
     async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
-        self.current_stats.reads += 1;
-        self.current_stats.bytes_read += bytes.len() as u64;
-
         if bytes.len() % Self::READ_SIZE != 0 {
             panic!("any read must be a multiple of Self::READ_SIZE bytes");
         }
@@ -153,8 +129,6 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
     const ERASE_SIZE: usize = Self::PAGE_BYTES;
 
     async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
-        self.current_stats.erases += 1;
-
         let from = from as usize;
         let to = to as usize;
 
@@ -181,8 +155,6 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
     }
 
     async fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
-        self.current_stats.writes += 1;
-
         let range = Self::validate_operation(offset, bytes.len())?;
 
         // Check alignment. Some flash types are strict about the alignment of the input buffer. This ensures
@@ -206,8 +178,6 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
                         Writable::N => return Err(MockFlashError::NotWritable(address as u32)),
                     };
                 }
-
-                self.current_stats.bytes_written += 1;
 
                 self.as_bytes_mut()[address + byte_index] &= byte;
             }
@@ -247,113 +217,9 @@ impl NorFlashError for MockFlashError {
     }
 }
 
-/// A snapshot of the flash performance statistics
-#[derive(Debug, Clone, Copy)]
-pub struct FlashStatsSnapshot {
-    erases: u64,
-    reads: u64,
-    writes: u64,
-    bytes_read: u64,
-    bytes_written: u64,
-}
-
-impl FlashStatsSnapshot {
-    /// Compare the snapshot to another snapshot.
-    ///
-    /// The oldest snapshot goes first, so it's `old.compare_to(new)`.
-    pub fn compare_to(&self, other: Self) -> FlashStatsResult {
-        FlashStatsResult {
-            erases: other
-                .erases
-                .checked_sub(self.erases)
-                .expect("Order is old compare to new"),
-            reads: other
-                .reads
-                .checked_sub(self.reads)
-                .expect("Order is old compare to new"),
-            writes: other
-                .writes
-                .checked_sub(self.writes)
-                .expect("Order is old compare to new"),
-            bytes_read: other
-                .bytes_read
-                .checked_sub(self.bytes_read)
-                .expect("Order is old compare to new"),
-            bytes_written: other
-                .bytes_written
-                .checked_sub(self.bytes_written)
-                .expect("Order is old compare to new"),
-        }
-    }
-}
-
-/// The performance stats of everything between two snapshots
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct FlashStatsResult {
-    /// The amount of times a page has been erased
-    pub erases: u64,
-    /// The amount of times a read operation was started
-    pub reads: u64,
-    /// The amount of times a write operation was started
-    pub writes: u64,
-    /// The total amount of bytes that were read
-    pub bytes_read: u64,
-    /// The total amount of bytes that were written
-    pub bytes_written: u64,
-}
-
-impl FlashStatsResult {
-    /// Take the average of the stats
-    pub fn take_average(&self, divider: u64) -> FlashAverageStatsResult {
-        FlashAverageStatsResult {
-            avg_erases: self.erases as f64 / divider as f64,
-            avg_reads: self.reads as f64 / divider as f64,
-            avg_writes: self.writes as f64 / divider as f64,
-            avg_bytes_read: self.bytes_read as f64 / divider as f64,
-            avg_bytes_written: self.bytes_written as f64 / divider as f64,
-        }
-    }
-}
-
-impl AddAssign for FlashStatsResult {
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl Add for FlashStatsResult {
-    type Output = FlashStatsResult;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            erases: self.erases + rhs.erases,
-            reads: self.reads + rhs.reads,
-            writes: self.writes + rhs.writes,
-            bytes_read: self.bytes_read + rhs.bytes_read,
-            bytes_written: self.bytes_written + rhs.bytes_written,
-        }
-    }
-}
-
-/// The averaged performance stats of everything between two snapshots
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct FlashAverageStatsResult {
-    /// The amount of times a page has been erased
-    pub avg_erases: f64,
-    /// The amount of times a read operation was started
-    pub avg_reads: f64,
-    /// The amount of times a write operation was started
-    pub avg_writes: f64,
-    /// The total amount of bytes that were read
-    pub avg_bytes_read: f64,
-    /// The total amount of bytes that were written
-    pub avg_bytes_written: f64,
-}
-
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operation {
-    Read,
     Write,
     Erase,
 }
