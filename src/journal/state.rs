@@ -93,6 +93,10 @@ impl State {
         Ok(State(data))
     }
 
+    pub fn as_bytes(&self) -> [u8; 2] {
+        self.0
+    }
+
     fn check_crc(crc: u8, data: u8) -> bool {
         crc == CRC.checksum(&[data])
     }
