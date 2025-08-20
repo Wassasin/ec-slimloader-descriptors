@@ -441,7 +441,6 @@ impl AppImageDescriptor {
 
 #[cfg(test)]
 mod unit_tests {
-
     #[test]
     fn test_ram_descriptor_gen() {
         use super::*;

@@ -7,12 +7,17 @@ const CRC: crc::Crc<u8> = crc::Crc::<u8>::new(&crc::CRC_8_OPENSAFETY);
 /// Valid values from 0x00 to 0x06.
 pub struct Slot(u8);
 
-impl Slot {
-    pub fn try_from_u8(val: u8) -> Option<Slot> {
+#[derive(Debug)]
+pub struct TooManyBits;
+
+impl TryFrom<u8> for Slot {
+    type Error = TooManyBits;
+
+    fn try_from(val: u8) -> Result<Slot, Self::Error> {
         if val >= 0b111 {
-            None
+            Err(TooManyBits)
         } else {
-            Some(Slot(val))
+            Ok(Slot(val))
         }
     }
 }
@@ -97,7 +102,7 @@ impl State {
     }
 
     fn try_target(val: u8) -> Option<Slot> {
-        Slot::try_from_u8(val & 0b111)
+        Slot::try_from(val & 0b111).ok()
     }
 
     pub fn target(&self) -> Slot {
@@ -106,11 +111,33 @@ impl State {
     }
 
     fn try_backup(val: u8) -> Option<Slot> {
-        Slot::try_from_u8((val >> 3) & 0b111)
+        Slot::try_from((val >> 3) & 0b111).ok()
     }
 
     pub fn backup(&self) -> Slot {
         // If Self exists, Slot must be valid.
         unsafe { State::try_backup(self.0[0]).unwrap_unchecked() }
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn slot_validity() {
+        for i in 0b0..0b111u8 {
+            assert!(Slot::try_from(i).is_ok());
+        }
+
+        for i in 0b111..=0xffu8 {
+            assert!(Slot::try_from(i).is_err());
+        }
+    }
+
+    #[test]
+    fn state_validity() {
+        let state = State::new(Status::Initial, Slot::try_from(2).unwrap(), Slot::try_from(1).unwrap());
+        assert_eq!(state.0[1], 12);
     }
 }
