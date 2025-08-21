@@ -28,6 +28,8 @@ use constmuck::bytes_of;
 /// re-export for matching software CRC32 checksum
 pub use crc::{Crc, Digest, CRC_32_ISO_HDLC};
 
+use crate::journal::state::MAX_SLOT_COUNT;
+
 mod version {
     include!(concat!(env!("OUT_DIR"), "/version.rs"));
 }
@@ -83,9 +85,6 @@ pub struct BootableRegionDescriptorHeader {
     /// The number of AppImageDescriptor's in the bootable descriptor region
     pub num_app_slots: u32,
 
-    /// Corresponds to which AppImageDescriptor should be booted
-    pub active_app_slot: u32,
-
     /// CRC32 checksum of above parameters
     pub header_crc: u32,
 }
@@ -100,29 +99,11 @@ pub struct AppImageDescriptor {
     /// Corresponds to index in AppImageDescriptor\[BootableRegionDescriptorHeader::num_app_slots\]
     pub app_slot_number: u32,
 
-    /// Application version for handling recovery and roll forward or back behaviors
-    pub app_version: u32,
-
-    /// Security version corresponding to this application image for roll-back attack protection enablement
-    pub security_version: u32,
-
-    /// App image behavior flags
-    pub flags: u32,
-
     /// Where the full, contiguous app image is stored
-    pub stored_address: u32,
+    pub slot_address: u32,
 
     /// The size of the app image stored at stored_address
-    pub image_size_bytes: u32,
-
-    /// The address where the CRC32 checksum over stored_address through stored_address + image_size_bytes is kept
-    pub stored_crc_address: u32,
-
-    /// how much memory to move from stored_address to execution_address before performing app load from bootloader
-    pub execution_copy_size_bytes: u32,
-
-    /// where to begin execution once the app image is validated and loaded
-    pub execution_address: u32,
+    pub slot_size_bytes: u32,
 
     /// CRC32 checksum over the above parameters
     pub descriptor_crc: u32,
@@ -152,7 +133,7 @@ pub enum ParseError {
         expected: u32,
     },
 
-    /// Active app slot is beyond the range of acceptable values based on num_app_slots
+    /// App slot is beyond the range of acceptable values based on num_app_slots
     InvalidAppSlot,
 
     /// num_app_slots is 0 or otherwise uninterpretable
@@ -230,22 +211,8 @@ impl BootableRegionDescriptors {
         Ok(this)
     }
 
-    /// Once a valid descriptor set is read, request the currently active marked App Image Descriptor
-    pub fn get_active_slot(&self) -> AppImageDescriptor {
-        // can't fail as BootableRegionDescriptors only constructs if all app descriptors are valid
-        AppImageDescriptor::from_region(
-            self.header.app_descriptor_base_address as *const u32,
-            self.header.active_app_slot,
-        )
-        .unwrap()
-    }
-
     pub fn get_app_descriptor_base_address(&self) -> u32 {
         self.header.app_descriptor_base_address
-    }
-
-    pub fn get_active_slot_number(&self) -> u32 {
-        self.header.active_app_slot
     }
 
     /// Get descriptor for a specific app slot
@@ -273,19 +240,15 @@ impl BootableRegionDescriptorHeader {
             })
         } else if unvalidated.num_app_slots < 1 {
             Err(ParseError::InvalidSlotCount)
-        } else if unvalidated.active_app_slot >= unvalidated.num_app_slots {
-            Err(ParseError::InvalidAppSlot)
+        } else if unvalidated.num_app_slots > MAX_SLOT_COUNT as u32 {
+            Err(ParseError::InvalidSlotCount)
         } else {
             Ok(unvalidated)
         }
     }
 
     /// Generate at compile time a descriptor region header. Useful for initialization and explicit linker placement for debug scenarios
-    pub const fn new(
-        app_slot_count: u32,
-        active_app_slot: u32,
-        app_descriptor_address: u32,
-    ) -> BootableRegionDescriptorHeader {
+    pub const fn new(app_slot_count: u32, app_descriptor_address: u32) -> BootableRegionDescriptorHeader {
         let mut this = BootableRegionDescriptorHeader {
             signature: BOOT_REGION_DESCRIPTOR_SIGNATURE,
             descriptor_version: DESCRIPTOR_VERSION,
@@ -293,7 +256,6 @@ impl BootableRegionDescriptorHeader {
             app_descriptor_size_bytes: APP_IMAGE_DESCRIPTOR_SIZE as u32,
             app_descriptor_base_address: app_descriptor_address,
             num_app_slots: app_slot_count,
-            active_app_slot,
             header_crc: 0,
         };
 
@@ -341,58 +303,14 @@ impl AppImageDescriptor {
         })
     }
 
-    /// Generate a non-copied (XIP: execute in place) app image descriptor with the given parameters
-    pub const fn new_execute_in_place_image(
-        slot: u32,
-        app_version: u32,
-        security_version: u32,
-        flags: u32,
-        stored_address: u32,
-        image_size_bytes: u32,
-        stored_crc_address: u32,
-    ) -> AppImageDescriptor {
-        let mut app_image_descriptor = Self {
-            descriptor_version: DESCRIPTOR_VERSION,
-            app_slot_number: slot,
-            app_version,
-            security_version,
-            flags,
-            stored_address,
-            image_size_bytes,
-            stored_crc_address,
-            execution_address: stored_address,
-            execution_copy_size_bytes: 0,
-            descriptor_crc: 0,
-        };
-
-        app_image_descriptor.descriptor_crc = app_image_descriptor.compute_crc();
-
-        app_image_descriptor
-    }
-
     #[allow(clippy::too_many_arguments)]
     /// Generate a copied to RAM app image descriptor with given parameters
-    pub const fn new_ram_image(
-        slot: u32,
-        app_version: u32,
-        security_version: u32,
-        flags: u32,
-        flash_address: u32,
-        image_size_bytes: u32,
-        ram_address: u32,
-        stored_crc_address: u32,
-    ) -> Self {
+    pub const fn new_ram_image(slot: u32, slot_address: u32, slot_size_bytes: u32) -> Self {
         let mut app_image_descriptor = Self {
             descriptor_version: DESCRIPTOR_VERSION,
             app_slot_number: slot,
-            app_version,
-            security_version,
-            flags: flags | APP_IMAGE_FLAG_COPY_TO_EXECUTION_ADDRESS,
-            stored_address: flash_address,
-            image_size_bytes,
-            stored_crc_address,
-            execution_address: ram_address,
-            execution_copy_size_bytes: image_size_bytes,
+            slot_address,
+            slot_size_bytes,
             descriptor_crc: 0,
         };
 
@@ -449,18 +367,7 @@ mod unit_tests {
     fn test_ram_descriptor_gen() {
         use super::*;
 
-        let app_image_descriptor = AppImageDescriptor::new_ram_image(
-            0,
-            0,
-            0,
-            APP_IMAGE_FLAG_NONE | APP_IMAGE_FLAG_SKIP_IMAGE_CRC_CHECK,
-            0,
-            0,
-            0,
-            0,
-        );
-
-        assert_ne!(app_image_descriptor.flags & APP_IMAGE_FLAG_COPY_TO_EXECUTION_ADDRESS, 0);
+        let app_image_descriptor = AppImageDescriptor::new_ram_image(0, 0, 0);
         let embedded_crc = app_image_descriptor.descriptor_crc;
         let computed_crc = app_image_descriptor.compute_crc();
         assert_eq!(embedded_crc, computed_crc);

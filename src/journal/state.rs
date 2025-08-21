@@ -1,5 +1,7 @@
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
+pub const MAX_SLOT_COUNT: usize = 0b111;
+
 const CRC: crc::Crc<u8> = crc::Crc::<u8>::new(&crc::CRC_8_OPENSAFETY);
 
 /// Image slot ID.
@@ -15,7 +17,7 @@ impl TryFrom<u8> for Slot {
     type Error = TooManyBits;
 
     fn try_from(val: u8) -> Result<Slot, Self::Error> {
-        if val >= 0b111 {
+        if val >= MAX_SLOT_COUNT as u8 {
             Err(TooManyBits)
         } else {
             Ok(Slot(val))
