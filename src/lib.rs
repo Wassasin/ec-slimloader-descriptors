@@ -51,15 +51,6 @@ pub const BOOT_REGION_DESCRIPTOR_SIGNATURE: u32 = 0x2222_2222;
 /// Size of the DESCRIPTOR_VERSION iteration of the bootable region descriptors header
 pub const BOOT_REGION_DESCRIPTOR_SIZE: usize = size_of::<BootableRegionDescriptorHeader>();
 
-/// App Image Flags: No flags set
-pub const APP_IMAGE_FLAG_NONE: u32 = 0x0000_0000;
-
-/// App Image Flags: Perform a memory write from stored_address to execution_address in the app image descriptor before executing
-pub const APP_IMAGE_FLAG_COPY_TO_EXECUTION_ADDRESS: u32 = 0x0000_0001;
-
-/// App Image Flags: Skip CRC32 checksum integrity check on app image corresponding to app image descriptor
-pub const APP_IMAGE_FLAG_SKIP_IMAGE_CRC_CHECK: u32 = 0x0000_0002;
-
 /// Size of the DESCRIPTOR_VERSION of the bootable region app image descriptor
 pub const APP_IMAGE_DESCRIPTOR_SIZE: usize = size_of::<AppImageDescriptor>();
 
@@ -111,6 +102,7 @@ pub struct AppImageDescriptor {
 
 /// Descriptor parsing error conditions
 #[derive(Copy, Clone, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ParseError {
     /// Descriptor region header does not start with BOOT_REGION_DESCRIPTOR_SIGNATURE
     InvalidSignature,

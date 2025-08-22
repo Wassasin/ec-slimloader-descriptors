@@ -9,6 +9,7 @@ use crate::journal::state::{ParseResult, State};
 
 /// Error describing that the Nvm should have at least two partitions.
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error<E> {
     /// A storage medium has been passed that does not contain at least two pages.
     NotEnoughPartitions,
@@ -47,7 +48,7 @@ struct Cache {
 }
 
 /// Bootloader [State] journal backed by Non-Volatile Memory.
-pub struct FlashJournal<T: NorFlash> {
+pub struct FlashJournal<T> {
     /// Inner flash storage.
     inner: T,
     /// A in-ram cache of the state on disk and where to write the next state to.

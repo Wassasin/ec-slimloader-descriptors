@@ -8,9 +8,11 @@ const CRC: crc::Crc<u8> = crc::Crc::<u8>::new(&crc::CRC_8_OPENSAFETY);
 ///
 /// Valid values from 0x00 to 0x06.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Slot(u8);
 
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct TooManyBits;
 
 impl TryFrom<u8> for Slot {
@@ -32,6 +34,7 @@ impl From<Slot> for u8 {
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ParseResult {
     /// Nor flash entry yet to be written.
     Unset,
@@ -44,6 +47,7 @@ pub enum ParseResult {
 /// The enum values are assigned such that bits can be dropped for the happy flow,
 /// ensuring minimal wear on the storage.
 #[derive(Debug, PartialEq, Clone, Copy, TryFromPrimitive, IntoPrimitive)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum Status {
     /// Initial attempt at booting the target image.
@@ -64,7 +68,7 @@ pub enum Status {
 /// as that is the typical value used by an empty NOR flash cell.
 ///
 /// We ensure this by disallowing Slot value 0b111.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy)]
 pub struct State([u8; 2]);
 
 impl State {
@@ -128,6 +132,29 @@ impl State {
     pub fn backup(&self) -> Slot {
         // If Self exists, Slot must be valid.
         unsafe { State::try_backup(self.0[0]).unwrap_unchecked() }
+    }
+}
+
+impl core::fmt::Debug for State {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("State")
+            .field("status", &self.status())
+            .field("target", &self.target())
+            .field("backup", &self.backup())
+            .finish()
+    }
+}
+
+#[cfg(feature = "defmt")]
+impl defmt::Format for State {
+    fn format(&self, f: defmt::Formatter) {
+        defmt::write!(
+            f,
+            "State {{ status: {}, target: {}, backup: {} }}",
+            self.status(),
+            self.target(),
+            self.backup()
+        )
     }
 }
 
