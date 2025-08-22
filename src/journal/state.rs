@@ -108,6 +108,10 @@ impl State {
         unsafe { Status::try_from_primitive(self.0[0] >> 6).unwrap_unchecked() }
     }
 
+    pub fn with_status(&self, status: Status) -> Self {
+        Self::new(status, self.target(), self.backup())
+    }
+
     fn try_target(val: u8) -> Option<Slot> {
         Slot::try_from(val & 0b111).ok()
     }
